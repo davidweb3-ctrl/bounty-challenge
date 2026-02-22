@@ -125,11 +125,16 @@ pub fn handle_register(request: &WasmRouteRequest) -> WasmRouteResponse {
         return bad_request_response();
     }
 
-    let reg: RegisterRequest = match bincode_options_route_body().deserialize(&request.body) {
+    // Try JSON first, then bincode for backwards compatibility
+    let reg: RegisterRequest = match serde_json::from_slice(&request.body) {
         Ok(r) => r,
-        Err(_) => return bad_request_response(),
+        Err(_) => match bincode_options_route_body().deserialize(&request.body) {
+            Ok(r) => r,
+            Err(_) => return bad_request_response(),
+        },
     };
 
+    // Use authenticated hotkey from headers, or fall back to body hotkey
     let hotkey = request.auth_hotkey.as_deref().unwrap_or(&reg.hotkey);
 
     let result = storage::register_user(&reg.github_username, hotkey);

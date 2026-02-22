@@ -385,6 +385,7 @@ dependencies = [
  "bincode",
  "platform-challenge-sdk-wasm",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

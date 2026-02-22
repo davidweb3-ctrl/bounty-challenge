@@ -15,9 +15,12 @@ pub struct BountySubmission {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RegisterRequest {
+    #[serde(default)]
     pub hotkey: String,
     pub github_username: String,
+    #[serde(default)]
     pub signature: Vec<u8>,
+    #[serde(default)]
     pub timestamp: i64,
 }
 
