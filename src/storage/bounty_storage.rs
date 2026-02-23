@@ -8,6 +8,9 @@ use crate::types::{
     InvalidIssueRecord, IssueRecord, LeaderboardEntry, UserBalance, UserRegistration,
 };
 
+const MAX_REGISTERED_HOTKEYS: usize = 10_000;
+const MAX_SYNCED_ISSUES: usize = 50_000;
+
 fn make_key(prefix: &[u8], suffix: &str) -> Vec<u8> {
     let mut key = Vec::from(prefix);
     key.extend_from_slice(suffix.as_bytes());
@@ -98,16 +101,10 @@ pub fn record_valid_issue(
 ) -> bool {
     let key = issue_key(repo_owner, repo_name, issue_number);
 
-    // Acquire a lock key to prevent concurrent claims on the same issue
-    let mut lock_key = Vec::from(b"lock:" as &[u8]);
-    lock_key.extend_from_slice(&key);
-    if host_storage_set(&lock_key, &[1]).is_err() {
-        return false;
-    }
-
+    // Check if issue already recorded (idempotent — consensus ensures
+    // only committed writes are visible, so duplicate proposals are harmless)
     if let Ok(data) = host_storage_get(&key) {
         if !data.is_empty() {
-            let _ = host_storage_set(&lock_key, &[]);
             return false;
         }
     }
@@ -130,19 +127,14 @@ pub fn record_valid_issue(
 
     let data = match bincode::serialize(&record) {
         Ok(d) => d,
-        Err(_) => {
-            let _ = host_storage_set(&lock_key, &[]);
-            return false;
-        }
+        Err(_) => return false,
     };
 
     if host_storage_set(&key, &data).is_err() {
-        let _ = host_storage_set(&lock_key, &[]);
         return false;
     }
 
     increment_valid_count(hotkey);
-    let _ = host_storage_set(&lock_key, &[]);
     true
 }
 
@@ -298,6 +290,9 @@ pub fn get_registered_hotkeys() -> Vec<String> {
 
 fn add_registered_hotkey(hotkey: &str) {
     let mut hotkeys = get_registered_hotkeys();
+    if hotkeys.len() >= MAX_REGISTERED_HOTKEYS {
+        return;
+    }
     if !hotkeys.iter().any(|h| h == hotkey) {
         hotkeys.push(String::from(hotkey));
         if let Ok(data) = bincode::serialize(&hotkeys) {
@@ -307,7 +302,12 @@ fn add_registered_hotkey(hotkey: &str) {
 }
 
 pub fn store_issue_data(issues: &[IssueRecord]) -> bool {
-    if let Ok(data) = bincode::serialize(issues) {
+    let truncated = if issues.len() > MAX_SYNCED_ISSUES {
+        &issues[..MAX_SYNCED_ISSUES]
+    } else {
+        issues
+    };
+    if let Ok(data) = bincode::serialize(truncated) {
         return host_storage_set(b"synced_issues", &data).is_ok();
     }
     false

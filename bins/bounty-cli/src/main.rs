@@ -17,9 +17,6 @@ const MENU_ITEMS: &[&str] = &[
     "Pending Issues",
     "Register",
     "Claim Bounty",
-    "Sync Consensus",
-    "Issue Consensus",
-    "Config",
     "Change RPC URL",
     "Quit",
 ];
@@ -59,10 +56,7 @@ async fn main() -> Result<()> {
             5 => views::issues::run_pending(&rpc_url).await,
             6 => views::register::run(&rpc_url).await,
             7 => views::claim::run(&rpc_url).await,
-            8 => views::consensus::run_sync(&rpc_url).await,
-            9 => views::consensus::run_issue(&rpc_url).await,
-            10 => views::config::run(&rpc_url).await,
-            11 => {
+            8 => {
                 let new_url: String = Input::new()
                     .with_prompt("New RPC URL")
                     .default(rpc_url.clone())
@@ -75,7 +69,7 @@ async fn main() -> Result<()> {
                 );
                 Ok(())
             }
-            12 => break,
+            9 => break,
             _ => break,
         };
 

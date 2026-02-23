@@ -93,10 +93,6 @@ pub fn handle_route_request(request: &WasmRouteRequest) -> WasmRouteResponse {
         ("GET", "/issues") => handlers::handle_issues(request),
         ("GET", "/issues/pending") => handlers::handle_issues_pending(request),
         ("GET", "/issues/stats") => handlers::handle_issues_stats(request),
-        ("POST", "/issues/sync") => WasmRouteResponse {
-            status: 403,
-            body: Vec::new(),
-        },
         ("GET", "/get_weights") => handlers::handle_get_weights(request),
         _ => {
             if method == "GET" {
