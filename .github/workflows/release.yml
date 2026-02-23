@@ -1,0 +1,96 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: Build and Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "bounty-release"
+
+      # Get version from Cargo.toml
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      # Build WASM module
+      - name: Build WASM
+        run: cargo build --release --target wasm32-unknown-unknown
+
+      # Build CLI for multiple platforms
+      - name: Build CLI (Linux)
+        run: cargo build --release -p bounty-cli
+
+      # Create release artifacts
+      - name: Prepare artifacts
+        run: |
+          mkdir -p artifacts
+          cp target/wasm32-unknown-unknown/release/bounty_challenge.wasm artifacts/
+          cp target/release/bounty-cli artifacts/bounty-cli-linux-x86_64
+          chmod +x artifacts/bounty-cli-linux-x86_64
+          
+          # Create checksums
+          cd artifacts
+          sha256sum * > SHA256SUMS
+
+      # Check if tag exists
+      - name: Check tag
+        id: check_tag
+        run: |
+          if git rev-parse "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      # Create release only if tag doesn't exist
+      - name: Create Release
+        if: steps.check_tag.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: Bounty Challenge v${{ steps.version.outputs.version }}
+          body: |
+            ## Bounty Challenge v${{ steps.version.outputs.version }}
+            
+            ### Downloads
+            - `bounty-cli-linux-x86_64` - Linux CLI binary
+            - `bounty_challenge.wasm` - WASM module for validators
+            
+            ### Installation
+            ```bash
+            # Download CLI
+            curl -LO https://github.com/PlatformNetwork/bounty-challenge/releases/download/v${{ steps.version.outputs.version }}/bounty-cli-linux-x86_64
+            chmod +x bounty-cli-linux-x86_64
+            ./bounty-cli-linux-x86_64
+            ```
+            
+            ### Default RPC
+            The CLI connects to `https://chain.platform.network` by default.
+          files: |
+            artifacts/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

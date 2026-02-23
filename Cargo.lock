@@ -380,7 +380,7 @@ dependencies = [
 
 [[package]]
 name = "bounty-challenge"
-version = "2.0.0"
+version = "0.0.1"
 dependencies = [
  "bincode",
  "platform-challenge-sdk-wasm",
@@ -390,7 +390,7 @@ dependencies = [
 
 [[package]]
 name = "bounty-cli"
-version = "2.0.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "console",
