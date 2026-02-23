@@ -92,6 +92,12 @@ pub fn get_route_definitions() -> Vec<WasmRouteDefinition> {
             description: String::from("Register a single user with hotkey (sudo owner only)"),
             requires_auth: true,
         },
+        WasmRouteDefinition {
+            method: String::from("POST"),
+            path: String::from("/sudo/sync_github"),
+            description: String::from("Trigger GitHub issue sync manually (sudo owner only)"),
+            requires_auth: true,
+        },
     ]
 }
 
@@ -110,6 +116,7 @@ pub fn handle_route_request(request: &WasmRouteRequest) -> WasmRouteResponse {
         ("GET", "/get_weights") => handlers::handle_get_weights(request),
         ("POST", "/sudo/bulk_migrate") => handlers::handle_sudo_bulk_migrate(request),
         ("POST", "/sudo/register_user") => handlers::handle_sudo_register_user(request),
+        ("POST", "/sudo/sync_github") => handlers::handle_sudo_sync_github(request),
         _ => {
             if method == "GET" {
                 if path.starts_with("/status/") {
