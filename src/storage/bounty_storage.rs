@@ -1,7 +1,7 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use platform_challenge_sdk_wasm::host_functions::{
-    host_consensus_get_epoch, host_storage_get, host_storage_set,
+    host_consensus_get_epoch, host_storage_get, host_storage_list_prefix, host_storage_set,
 };
 
 use crate::ss58;
@@ -9,7 +9,6 @@ use crate::types::{
     InvalidIssueRecord, IssueRecord, LeaderboardEntry, UserBalance, UserRegistration,
 };
 
-const MAX_REGISTERED_HOTKEYS: usize = 10_000;
 const MAX_SYNCED_ISSUES: usize = 50_000;
 
 fn make_key(prefix: &[u8], suffix: &str) -> Vec<u8> {
@@ -318,7 +317,26 @@ pub fn store_leaderboard(entries: &[LeaderboardEntry]) -> bool {
     false
 }
 
+/// Deserialize the bincode Vec<(Vec<u8>, Vec<u8>)> returned by list_prefix
+fn decode_list_prefix(data: &[u8]) -> Vec<(Vec<u8>, Vec<u8>)> {
+    bincode::deserialize(data).unwrap_or_default()
+}
+
 pub fn get_registered_hotkeys() -> Vec<String> {
+    // Try indexed storage first (hotkey_idx: prefix)
+    if let Ok(data) = host_storage_list_prefix(b"hotkey_idx:", 10_000) {
+        if !data.is_empty() {
+            let pairs = decode_list_prefix(&data);
+            if !pairs.is_empty() {
+                return pairs
+                    .into_iter()
+                    .filter_map(|(_k, v)| String::from_utf8(v).ok())
+                    .collect();
+            }
+        }
+    }
+
+    // Fallback: legacy blob
     host_storage_get(b"registered_hotkeys")
         .ok()
         .and_then(|d| {
@@ -333,16 +351,10 @@ pub fn get_registered_hotkeys() -> Vec<String> {
 
 fn add_registered_hotkey(hotkey: &str) {
     let hotkey_ss58 = normalize_hotkey_for_storage(hotkey);
-    let mut hotkeys = get_registered_hotkeys();
-    if hotkeys.len() >= MAX_REGISTERED_HOTKEYS {
-        return;
-    }
-    if !hotkeys.iter().any(|h| h == &hotkey_ss58) {
-        hotkeys.push(hotkey_ss58);
-        if let Ok(data) = bincode::serialize(&hotkeys) {
-            let _ = host_storage_set(b"registered_hotkeys", &data);
-        }
-    }
+
+    // Write individual indexed key
+    let idx_key = make_key(b"hotkey_idx:", &hotkey_ss58);
+    let _ = host_storage_set(&idx_key, hotkey_ss58.as_bytes());
 }
 
 pub fn store_issue_data(issues: &[IssueRecord]) -> bool {
@@ -351,6 +363,14 @@ pub fn store_issue_data(issues: &[IssueRecord]) -> bool {
     } else {
         issues
     };
+    // Store each issue individually for indexed access
+    for issue in truncated {
+        let key = issue_key(&issue.repo_owner, &issue.repo_name, issue.issue_number);
+        if let Ok(data) = bincode::serialize(issue) {
+            let _ = host_storage_set(&key, &data);
+        }
+    }
+    // Also store the blob for backward compat
     if let Ok(data) = bincode::serialize(truncated) {
         return host_storage_set(b"synced_issues", &data).is_ok();
     }
@@ -358,6 +378,20 @@ pub fn store_issue_data(issues: &[IssueRecord]) -> bool {
 }
 
 pub fn get_synced_issues() -> Vec<IssueRecord> {
+    // Try indexed storage first (issue: prefix)
+    if let Ok(data) = host_storage_list_prefix(b"issue:", 50_000) {
+        if !data.is_empty() {
+            let pairs = decode_list_prefix(&data);
+            if !pairs.is_empty() {
+                return pairs
+                    .into_iter()
+                    .filter_map(|(_k, v)| bincode::deserialize::<IssueRecord>(&v).ok())
+                    .collect();
+            }
+        }
+    }
+
+    // Fallback: legacy blob
     host_storage_get(b"synced_issues")
         .ok()
         .and_then(|d| {
