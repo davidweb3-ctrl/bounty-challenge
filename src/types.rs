@@ -40,6 +40,8 @@ pub struct IssueRecord {
     pub is_closed: bool,
     pub has_valid_label: bool,
     pub has_invalid_label: bool,
+    #[serde(default)]
+    pub has_ide_label: bool,
     pub claimed_by_hotkey: Option<String>,
     pub recorded_epoch: u64,
 }

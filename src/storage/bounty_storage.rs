@@ -115,6 +115,7 @@ pub fn record_valid_issue(
         is_closed: true,
         has_valid_label: true,
         has_invalid_label: false,
+        has_ide_label: true,
         claimed_by_hotkey: Some(String::from(hotkey)),
         recorded_epoch: current_epoch,
     };

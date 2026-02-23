@@ -13,9 +13,20 @@
 
 </div>
 
-Bounty Challenge is a WASM evaluation module for [Platform Network](https://github.com/PlatformNetwork/platform). Miners earn rewards by discovering and reporting valid GitHub issues. Issues must be closed with the `valid` label by project maintainers to qualify for rewards.
+Bounty Challenge is a WASM evaluation module for [Platform Network](https://github.com/PlatformNetwork/platform). Miners earn rewards by discovering and reporting valid issues for **Cortex IDE**. Issues must be closed with both the `ide` and `valid` labels by project maintainers to qualify for rewards.
 
-> **IMPORTANT**: To receive rewards, you MUST submit issues in **this repository** ([PlatformNetwork/bounty-challenge](https://github.com/PlatformNetwork/bounty-challenge/issues)). Issues submitted directly to other repositories will **NOT** be counted for rewards.
+## Target Project
+
+**Repository:** [CortexLM/cortex-ide](https://github.com/CortexLM/cortex-ide)
+
+### Submission Rules
+
+1. **Submit issues in the target repository**: [CortexLM/cortex-ide/issues](https://github.com/CortexLM/cortex-ide/issues)
+2. **Include screenshots and/or videos** demonstrating the bug or feature request
+3. **Wait for maintainers** to review and close the issue with `ide` + `valid` labels
+4. **Claim your bounty** once the issue is labeled and closed
+
+> **IMPORTANT**: Issues without screenshots/videos will be rejected. Issues must have BOTH the `ide` AND `valid` labels to qualify for rewards.
 
 ## How to Mine
 
@@ -69,9 +80,10 @@ The signature is created by signing `register_github:{username_lowercase}:{times
 
 ### 4. Find and Report Issues
 
-1. Discover valid bugs or issues in eligible repositories
-2. Submit the issue in **this repository** ([PlatformNetwork/bounty-challenge](https://github.com/PlatformNetwork/bounty-challenge/issues))
-3. Wait for project maintainers to review and close the issue with the `valid` label
+1. Discover bugs or issues in [CortexLM/cortex-ide](https://github.com/CortexLM/cortex-ide)
+2. Submit the issue in **[CortexLM/cortex-ide/issues](https://github.com/CortexLM/cortex-ide/issues)**
+3. **Include screenshots and/or videos** demonstrating the issue
+4. Wait for project maintainers to review and close the issue with `ide` + `valid` labels
 
 ### 5. Claim Your Bounty
 
@@ -150,7 +162,7 @@ cargo build --release -p bounty-cli
 
 | Source | Points | Description |
 |--------|--------|-------------|
-| **Valid Issue** | 1 point | Issue closed with `valid` label |
+| **Valid Issue** | 1 point | Issue closed with `ide` + `valid` labels |
 | **Starred Repo** | 0.25 points | Each starred target repository |
 
 ### Weight Calculation
@@ -231,7 +243,8 @@ cargo build -p bounty-cli
 
 | Mechanism | Description |
 |-----------|-------------|
-| **Valid Label Required** | Only issues closed with `valid` label count |
+| **Dual Label Required** | Only issues with BOTH `ide` AND `valid` labels count |
+| **Screenshot/Video Required** | Issues without visual evidence are rejected |
 | **Signature Verification** | sr25519 signature proves hotkey ownership |
 | **Author Verification** | GitHub username must match issue author |
 | **First Reporter Wins** | Each issue can only be claimed once |
