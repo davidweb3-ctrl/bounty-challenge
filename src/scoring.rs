@@ -114,6 +114,12 @@ pub fn rebuild_leaderboard() {
 
 /// Perform a full sync: rebuild leaderboard and return sync result for consensus
 pub fn perform_sync() -> SyncResult {
+    // Every 120 blocks, fetch GitHub issues and award/penalize
+    let block = platform_challenge_sdk_wasm::host_functions::host_consensus_get_block_height();
+    if block > 0 && block % 120 == 0 {
+        crate::github_sync::fetch_and_process_issues();
+    }
+
     rebuild_leaderboard();
 
     let entries = storage::get_leaderboard();

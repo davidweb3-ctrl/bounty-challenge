@@ -3,6 +3,7 @@
 extern crate alloc;
 
 mod api;
+mod github_sync;
 mod routes;
 mod scoring;
 pub mod ss58;
