@@ -226,57 +226,76 @@ pub fn get_issue_record(
 }
 
 pub fn get_user_balance(hotkey: &str) -> UserBalance {
-    let key = make_key(b"balance:", hotkey);
-    host_storage_get(&key)
-        .ok()
-        .and_then(|d| {
-            if d.is_empty() {
-                None
-            } else {
-                bincode::deserialize(&d).ok()
-            }
-        })
-        .unwrap_or_default()
+    let hotkey_ss58 = normalize_hotkey_for_storage(hotkey);
+    let key = make_key(b"balance:", &hotkey_ss58);
+    let result = host_storage_get(&key).ok().and_then(|d| {
+        if d.is_empty() {
+            None
+        } else {
+            bincode::deserialize(&d).ok()
+        }
+    });
+
+    // Fallback to original key for migration
+    if result.is_none() && hotkey != hotkey_ss58 {
+        let key = make_key(b"balance:", hotkey);
+        return host_storage_get(&key)
+            .ok()
+            .and_then(|d| {
+                if d.is_empty() {
+                    None
+                } else {
+                    bincode::deserialize(&d).ok()
+                }
+            })
+            .unwrap_or_default();
+    }
+
+    result.unwrap_or_default()
 }
 
 fn store_user_balance(hotkey: &str, balance: &UserBalance) {
-    let key = make_key(b"balance:", hotkey);
+    let hotkey_ss58 = normalize_hotkey_for_storage(hotkey);
+    let key = make_key(b"balance:", &hotkey_ss58);
     if let Ok(data) = bincode::serialize(balance) {
         let _ = host_storage_set(&key, &data);
     }
 }
 
 fn increment_valid_count(hotkey: &str) {
-    let mut balance = get_user_balance(hotkey);
+    let hotkey_ss58 = normalize_hotkey_for_storage(hotkey);
+    let mut balance = get_user_balance(&hotkey_ss58);
     balance.valid_count = balance.valid_count.saturating_add(1);
     let penalty = (balance
         .invalid_count
         .saturating_add(balance.duplicate_count))
     .saturating_sub(balance.valid_count);
     balance.is_penalized = penalty > 0;
-    store_user_balance(hotkey, &balance);
+    store_user_balance(&hotkey_ss58, &balance);
 }
 
 pub fn increment_duplicate_count(hotkey: &str) {
-    let mut balance = get_user_balance(hotkey);
+    let hotkey_ss58 = normalize_hotkey_for_storage(hotkey);
+    let mut balance = get_user_balance(&hotkey_ss58);
     balance.duplicate_count = balance.duplicate_count.saturating_add(1);
     let penalty = (balance
         .invalid_count
         .saturating_add(balance.duplicate_count))
     .saturating_sub(balance.valid_count);
     balance.is_penalized = penalty > 0;
-    store_user_balance(hotkey, &balance);
+    store_user_balance(&hotkey_ss58, &balance);
 }
 
 fn increment_invalid_count(hotkey: &str) {
-    let mut balance = get_user_balance(hotkey);
+    let hotkey_ss58 = normalize_hotkey_for_storage(hotkey);
+    let mut balance = get_user_balance(&hotkey_ss58);
     balance.invalid_count = balance.invalid_count.saturating_add(1);
     let penalty = (balance
         .invalid_count
         .saturating_add(balance.duplicate_count))
     .saturating_sub(balance.valid_count);
     balance.is_penalized = penalty > 0;
-    store_user_balance(hotkey, &balance);
+    store_user_balance(&hotkey_ss58, &balance);
 }
 
 pub fn get_leaderboard() -> Vec<LeaderboardEntry> {
@@ -313,12 +332,13 @@ pub fn get_registered_hotkeys() -> Vec<String> {
 }
 
 fn add_registered_hotkey(hotkey: &str) {
+    let hotkey_ss58 = normalize_hotkey_for_storage(hotkey);
     let mut hotkeys = get_registered_hotkeys();
     if hotkeys.len() >= MAX_REGISTERED_HOTKEYS {
         return;
     }
-    if !hotkeys.iter().any(|h| h == hotkey) {
-        hotkeys.push(String::from(hotkey));
+    if !hotkeys.iter().any(|h| h == &hotkey_ss58) {
+        hotkeys.push(hotkey_ss58);
         if let Ok(data) = bincode::serialize(&hotkeys) {
             let _ = host_storage_set(b"registered_hotkeys", &data);
         }
