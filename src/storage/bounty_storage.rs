@@ -420,10 +420,30 @@ pub fn ensure_hotkey_tracked(hotkey: &str) {
     add_registered_hotkey(hotkey);
 }
 
-const SUDO_OWNER_HOTKEY: &str = "5GziQCcRpN8NCJktX343brnfuVe3w6gUYieeStXPD1Dag2At";
+const SUDO_OWNER_KEY: &[u8] = b"sudo_owner";
+const DEFAULT_SUDO_OWNER: &str = "5GziQCcRpN8NCJktX343brnfuVe3w6gUYieeStXPD1Dag2At";
+
+pub fn get_sudo_owner() -> Option<String> {
+    let data = host_storage_get(SUDO_OWNER_KEY).ok()?;
+    if data.is_empty() {
+        return None;
+    }
+    String::from_utf8(data).ok()
+}
+
+pub fn set_sudo_owner(hotkey: &str) {
+    let _ = host_storage_set(SUDO_OWNER_KEY, hotkey.as_bytes());
+}
 
 pub fn is_sudo_owner(hotkey: &str) -> bool {
-    hotkey == SUDO_OWNER_HOTKEY
+    let hotkey_normalized = normalize_hotkey_for_storage(hotkey);
+    match get_sudo_owner() {
+        Some(owner) => {
+            let owner_normalized = normalize_hotkey_for_storage(&owner);
+            owner_normalized == hotkey_normalized
+        }
+        None => hotkey_normalized == DEFAULT_SUDO_OWNER,
+    }
 }
 
 pub fn bulk_register_users(entries: &[(String, String)]) -> (u32, u32) {
@@ -461,4 +481,9 @@ pub fn bulk_register_users(entries: &[(String, String)]) -> (u32, u32) {
     }
 
     (success_count, skip_count)
+}
+
+pub fn get_pending_issues_count() -> u32 {
+    let issues = get_pending_issues();
+    issues.len() as u32
 }

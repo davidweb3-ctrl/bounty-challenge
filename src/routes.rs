@@ -86,6 +86,12 @@ pub fn get_route_definitions() -> Vec<WasmRouteDefinition> {
             ),
             requires_auth: true,
         },
+        WasmRouteDefinition {
+            method: String::from("POST"),
+            path: String::from("/sudo/register_user"),
+            description: String::from("Register a single user with hotkey (sudo owner only)"),
+            requires_auth: true,
+        },
     ]
 }
 
@@ -103,6 +109,7 @@ pub fn handle_route_request(request: &WasmRouteRequest) -> WasmRouteResponse {
         ("GET", "/issues/stats") => handlers::handle_issues_stats(request),
         ("GET", "/get_weights") => handlers::handle_get_weights(request),
         ("POST", "/sudo/bulk_migrate") => handlers::handle_sudo_bulk_migrate(request),
+        ("POST", "/sudo/register_user") => handlers::handle_sudo_register_user(request),
         _ => {
             if method == "GET" {
                 if path.starts_with("/status/") {

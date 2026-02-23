@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
 
 use crate::storage;
-use crate::types::LeaderboardEntry;
+use crate::types::{LeaderboardEntry, SyncResult};
 
 pub const WEIGHT_PER_POINT: f64 = 0.02;
 pub const STAR_BONUS_PER_REPO: f64 = 0.25;
@@ -110,4 +110,48 @@ pub fn rebuild_leaderboard() {
     }
 
     storage::store_leaderboard(&entries);
+}
+
+/// Perform a full sync: rebuild leaderboard and return sync result for consensus
+pub fn perform_sync() -> SyncResult {
+    rebuild_leaderboard();
+
+    let entries = storage::get_leaderboard();
+    let hotkeys = storage::get_registered_hotkeys();
+
+    // Calculate totals
+    let mut total_valid = 0u32;
+    let mut total_invalid = 0u32;
+
+    for hotkey in &hotkeys {
+        let balance = storage::get_user_balance(hotkey);
+        total_valid = total_valid.saturating_add(balance.valid_count);
+        total_invalid = total_invalid.saturating_add(balance.invalid_count);
+    }
+
+    // Count pending issues
+    let total_pending = storage::get_pending_issues_count();
+
+    // Hash the leaderboard for consensus comparison
+    let leaderboard_data = bincode::serialize(&entries).unwrap_or_default();
+    let leaderboard_hash = {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(&leaderboard_data);
+        let result = hasher.finalize();
+        let mut hash = [0u8; 32];
+        hash.copy_from_slice(&result);
+        hash
+    };
+
+    let epoch = platform_challenge_sdk_wasm::host_functions::host_consensus_get_epoch();
+
+    SyncResult {
+        leaderboard_hash,
+        total_users: hotkeys.len() as u32,
+        total_valid_issues: total_valid,
+        total_invalid_issues: total_invalid,
+        total_pending_issues: total_pending,
+        sync_timestamp: epoch,
+    }
 }

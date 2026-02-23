@@ -204,3 +204,14 @@ pub struct BulkMigrationRequest {
 }
 
 pub use platform_challenge_sdk_wasm::{LlmMessage, LlmRequest, LlmResponse};
+
+/// Result of a sync operation for consensus
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SyncResult {
+    pub leaderboard_hash: [u8; 32],
+    pub total_users: u32,
+    pub total_valid_issues: u32,
+    pub total_invalid_issues: u32,
+    pub total_pending_issues: u32,
+    pub sync_timestamp: i64,
+}

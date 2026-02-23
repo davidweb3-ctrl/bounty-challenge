@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use bincode::Options;
 use platform_challenge_sdk_wasm::host_functions::host_consensus_get_submission_count;
 use platform_challenge_sdk_wasm::{WasmRouteRequest, WasmRouteResponse};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::types::{
     BountySubmission, BulkMigrationRequest, ClaimRequest, GitHubUserDetailsResponse, IssueRecord,
@@ -462,6 +462,11 @@ pub fn handle_sudo_bulk_migrate(request: &WasmRouteRequest) -> WasmRouteResponse
         _ => return unauthorized_response(),
     };
 
+    // Auto-set sudo owner on first call if not set
+    if storage::get_sudo_owner().is_none() {
+        storage::set_sudo_owner(&auth_hotkey);
+    }
+
     if !storage::is_sudo_owner(&auth_hotkey) {
         return json_error(
             403,
@@ -506,4 +511,50 @@ pub fn handle_sudo_bulk_migrate(request: &WasmRouteRequest) -> WasmRouteResponse
         "skipped": skipped,
         "total": migration.entries.len()
     }))
+}
+
+#[derive(Debug, Deserialize)]
+struct SudoRegisterRequest {
+    pub hotkey: alloc::string::String,
+    pub github_username: alloc::string::String,
+}
+
+pub fn handle_sudo_register_user(request: &WasmRouteRequest) -> WasmRouteResponse {
+    if !is_authenticated(request) {
+        return unauthorized_response();
+    }
+
+    let auth_hotkey = match &request.auth_hotkey {
+        Some(h) if !h.is_empty() => h.clone(),
+        _ => return unauthorized_response(),
+    };
+
+    if !storage::is_sudo_owner(&auth_hotkey) {
+        return json_error(403, "forbidden", "Only the sudo owner can register users");
+    }
+
+    let req: SudoRegisterRequest = match serde_json::from_slice(&request.body) {
+        Ok(r) => r,
+        Err(_) => return json_error(400, "bad_request", "Invalid request JSON"),
+    };
+
+    if req.hotkey.is_empty() || req.github_username.is_empty() {
+        return json_error(400, "bad_request", "hotkey and github_username required");
+    }
+
+    if storage::register_user(&req.github_username, &req.hotkey) {
+        storage::ensure_hotkey_tracked(&req.hotkey);
+        scoring::rebuild_leaderboard();
+        json_response(&serde_json::json!({
+            "success": true,
+            "hotkey": req.hotkey,
+            "github_username": req.github_username
+        }))
+    } else {
+        json_error(
+            400,
+            "registration_failed",
+            "User already registered or conflict",
+        )
+    }
 }

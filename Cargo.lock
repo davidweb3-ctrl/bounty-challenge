@@ -388,6 +388,7 @@ dependencies = [
  "platform-challenge-sdk-wasm",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -2185,7 +2186,6 @@ checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
 [[package]]
 name = "platform-challenge-sdk-wasm"
 version = "0.1.0"
-source = "git+https://github.com/PlatformNetwork/platform.git?rev=369521c0#369521c0fd54c5d05e119a6ef86f8c89d7f0f378"
 dependencies = [
  "bincode",
  "serde",

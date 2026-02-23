@@ -155,6 +155,11 @@ impl Challenge for BountyChallengeWasm {
         let weights = scoring::calculate_weights_from_leaderboard(&entries);
         bincode::serialize(&weights).unwrap_or_default()
     }
+
+    fn sync(&self) -> Vec<u8> {
+        let result = scoring::perform_sync();
+        bincode::serialize(&result).unwrap_or_default()
+    }
 }
 
 platform_challenge_sdk_wasm::register_challenge!(BountyChallengeWasm, BountyChallengeWasm::new());
