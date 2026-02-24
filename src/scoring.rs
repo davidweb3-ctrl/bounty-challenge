@@ -43,7 +43,7 @@ pub fn calculate_weights_from_leaderboard(entries: &[LeaderboardEntry]) -> Vec<W
         .iter()
         .filter(|e| !crate::storage::is_banned(&e.hotkey) && e.net_points > 0.0)
         .map(|e| WeightAssignment {
-            hotkey: e.hotkey.clone(),
+            hotkey: crate::ss58::normalize_hotkey(&e.hotkey).unwrap_or_else(|| e.hotkey.clone()),
             weight: e.net_points,
         })
         .collect();
@@ -104,7 +104,7 @@ pub fn rebuild_leaderboard() {
 
         entries.push(LeaderboardEntry {
             rank: 0,
-            hotkey: hotkey.clone(),
+            hotkey: crate::ss58::normalize_hotkey(hotkey).unwrap_or_else(|| hotkey.clone()),
             github_username,
             score,
             valid_issues: balance.valid_count,

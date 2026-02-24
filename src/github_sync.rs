@@ -7,9 +7,9 @@ use crate::storage;
 
 const GITHUB_REPO_OWNER: &str = "PlatformNetwork";
 const GITHUB_REPO_NAME: &str = "bounty-challenge";
-const MIN_ISSUES_TO_FETCH: usize = 400;
+const MIN_ISSUES_TO_FETCH: usize = 1000;
 const ISSUES_PER_PAGE: usize = 100;
-const SECONDS_24H: i64 = 86_400;
+const SECONDS_24H: i64 = 345_600; // temporary: 96h instead of 24h
 
 #[derive(Serialize, Deserialize)]
 struct HttpGetRequest {
@@ -185,8 +185,6 @@ pub fn fetch_and_process_issues() -> SyncStats {
 
     // Accumulate balance deltas in memory to avoid read-after-write issues
     // (P2P writes are not immediately visible to subsequent reads)
-    let mut valid_deltas: BTreeMap<String, u32> = BTreeMap::new();
-    let mut invalid_deltas: BTreeMap<String, u32> = BTreeMap::new();
 
     for issue in &all_issues {
         let author = match &issue.user {
@@ -197,11 +195,15 @@ pub fn fetch_and_process_issues() -> SyncStats {
         let label_names: Vec<String> = issue.labels.iter().map(|l| l.name.to_lowercase()).collect();
         let has_valid = label_names.iter().any(|l| l == "valid");
         let has_invalid = label_names.iter().any(|l| l == "invalid");
+        let has_duplicate = label_names.iter().any(|l| l == "duplicate");
         let has_ide = label_names.iter().any(|l| l == "ide");
         let is_closed = issue.state == "closed";
 
-        // Only process issues that have relevant labels
-        if !has_valid && !has_invalid {
+        // Only process issues that have the "ide" label and a relevant status label
+        if !has_ide {
+            continue;
+        }
+        if !has_valid && !has_invalid && !has_duplicate {
             continue;
         }
 
@@ -211,33 +213,8 @@ pub fn fetch_and_process_issues() -> SyncStats {
             None => continue,
         };
 
-        // Check if labels changed on an already-recorded issue
-        let existing = storage::get_issue_record(GITHUB_REPO_OWNER, GITHUB_REPO_NAME, issue.number);
-        if let Some(ref rec) = existing {
-            let was_valid = rec.has_valid_label && rec.has_ide_label && !rec.has_invalid_label;
-            let is_now_valid = has_valid && has_ide && !has_invalid;
-            let was_invalid = rec.has_invalid_label;
-            let is_now_invalid = has_invalid;
-
-            if was_valid == is_now_valid && was_invalid == is_now_invalid {
-                continue; // No label change
-            }
-            // Labels changed -- remove old record, will re-record below
-            storage::delete_issue_record(GITHUB_REPO_OWNER, GITHUB_REPO_NAME, issue.number);
-            // Reverse the old delta
-            if was_valid {
-                if let Some(ref hk) = rec.claimed_by_hotkey {
-                    let counter = valid_deltas.entry(hk.clone()).or_insert(0);
-                    *counter = counter.saturating_sub(1);
-                }
-            }
-            if was_invalid {
-                if let Some(hk) = storage::get_hotkey_by_github(&rec.author) {
-                    let counter = invalid_deltas.entry(hk).or_insert(0);
-                    *counter = counter.saturating_sub(1);
-                }
-            }
-        }
+        // Always overwrite existing records to fix any corrupted data
+        storage::delete_issue_record(GITHUB_REPO_OWNER, GITHUB_REPO_NAME, issue.number);
 
         if has_valid && has_ide {
             if storage::record_valid_issue(
@@ -248,7 +225,6 @@ pub fn fetch_and_process_issues() -> SyncStats {
                 &hotkey,
             ) {
                 stats.awarded += 1;
-                *valid_deltas.entry(hotkey).or_insert(0) += 1;
             }
         } else if has_invalid {
             let reason = if !is_closed {
@@ -264,35 +240,22 @@ pub fn fetch_and_process_issues() -> SyncStats {
                 Some(reason),
             ) {
                 stats.penalized += 1;
-                *invalid_deltas.entry(hotkey).or_insert(0) += 1;
             }
+        } else if has_duplicate
+            && storage::record_duplicate_issue(
+                issue.number,
+                GITHUB_REPO_OWNER,
+                GITHUB_REPO_NAME,
+                &author,
+                &hotkey,
+            )
+        {
+            stats.penalized += 1;
         }
     }
 
-    // Batch-write all balance updates: read once, apply all deltas, write once per hotkey
-    let mut all_hotkeys: BTreeMap<String, bool> = BTreeMap::new();
-    for k in valid_deltas.keys() {
-        all_hotkeys.insert(k.clone(), true);
-    }
-    for k in invalid_deltas.keys() {
-        all_hotkeys.insert(k.clone(), true);
-    }
-
-    for hotkey in all_hotkeys.keys() {
-        let mut balance = storage::get_user_balance(hotkey);
-        if let Some(&delta) = valid_deltas.get(hotkey) {
-            balance.valid_count = balance.valid_count.saturating_add(delta);
-        }
-        if let Some(&delta) = invalid_deltas.get(hotkey) {
-            balance.invalid_count = balance.invalid_count.saturating_add(delta);
-        }
-        let penalty = (balance
-            .invalid_count
-            .saturating_add(balance.duplicate_count))
-        .saturating_sub(balance.valid_count);
-        balance.is_penalized = penalty > 0;
-        storage::store_user_balance(hotkey, &balance);
-    }
+    // Recount all balances from scratch to avoid additive drift on repeated syncs
+    storage::recount_all_balances();
 
     stats
 }

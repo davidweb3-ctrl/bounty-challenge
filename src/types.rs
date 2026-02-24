@@ -50,6 +50,8 @@ pub struct IssueRecord {
     pub has_ide_label: bool,
     pub claimed_by_hotkey: Option<String>,
     pub recorded_epoch: u64,
+    #[serde(default)]
+    pub has_duplicate_label: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -201,6 +203,23 @@ pub struct MigrationEntry {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BulkMigrationRequest {
     pub entries: Vec<MigrationEntry>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HotkeyDetailsResponse {
+    pub hotkey: String,
+    pub github_username: String,
+    pub registered_at: String,
+    pub valid_issues: u32,
+    pub invalid_issues: u32,
+    pub duplicate_issues: u32,
+    pub total_points: f64,
+    pub penalty_points: f64,
+    pub net_points: f64,
+    pub balance: UserBalance,
+    pub is_penalized: bool,
+    pub weight: f64,
+    pub recent_issues: Vec<IssueShort>,
 }
 
 pub use platform_challenge_sdk_wasm::{LlmMessage, LlmRequest, LlmResponse};

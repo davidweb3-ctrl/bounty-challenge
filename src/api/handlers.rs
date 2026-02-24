@@ -5,10 +5,16 @@ use platform_challenge_sdk_wasm::host_functions::host_consensus_get_submission_c
 use platform_challenge_sdk_wasm::{WasmRouteRequest, WasmRouteResponse};
 use serde::{Deserialize, Serialize};
 
+use crate::ss58;
 use crate::types::{
-    BountySubmission, BulkMigrationRequest, ClaimRequest, GitHubUserDetailsResponse, IssueRecord,
-    IssueShort, IssuesStatsResponse, RegisterRequest, StatsResponse, StatusResponse, UserBalance,
+    BountySubmission, BulkMigrationRequest, ClaimRequest, GitHubUserDetailsResponse,
+    HotkeyDetailsResponse, IssueRecord, IssueShort, IssuesStatsResponse, RegisterRequest,
+    StatsResponse, StatusResponse, UserBalance,
 };
+
+fn to_ss58(hotkey: &str) -> alloc::string::String {
+    ss58::normalize_hotkey(hotkey).unwrap_or_else(|| hotkey.to_string())
+}
 use crate::{scoring, storage, validation};
 
 const MAX_ROUTE_BODY_SIZE: usize = 1_048_576;
@@ -104,7 +110,7 @@ pub fn handle_status(request: &WasmRouteRequest) -> WasmRouteResponse {
         None => {
             let status = StatusResponse {
                 registered: false,
-                hotkey: hotkey.to_string(),
+                hotkey: to_ss58(hotkey),
                 github_username: None,
                 valid_issues_count: 0,
                 invalid_issues_count: 0,
@@ -130,7 +136,7 @@ pub fn handle_status(request: &WasmRouteRequest) -> WasmRouteResponse {
 
     let status = StatusResponse {
         registered: true,
-        hotkey: hotkey.to_string(),
+        hotkey: to_ss58(hotkey),
         github_username: Some(reg.github_username),
         valid_issues_count: balance.valid_count,
         invalid_issues_count: balance.invalid_count,
@@ -198,7 +204,7 @@ pub fn handle_register(request: &WasmRouteRequest) -> WasmRouteResponse {
         json_response(&serde_json::json!({
             "success": true,
             "message": "Registration successful",
-            "hotkey": hotkey,
+            "hotkey": to_ss58(hotkey),
             "github_username": reg.github_username
         }))
     } else {
@@ -329,16 +335,76 @@ pub fn handle_hotkey_details(request: &WasmRouteRequest) -> WasmRouteResponse {
         scoring::calculate_weight_from_points(balance.valid_count, balance.star_count)
     };
 
-    let status = StatusResponse {
-        registered: true,
-        hotkey: hotkey.to_string(),
-        github_username: Some(reg.github_username),
-        valid_issues_count: balance.valid_count,
-        invalid_issues_count: balance.invalid_count,
+    let total_points = balance.valid_count as f64;
+    let penalty_points = (balance.invalid_count + balance.duplicate_count) as f64;
+
+    // Build issues list for this miner's github username
+    let issues = storage::get_synced_issues();
+    let username_lower = reg.github_username.to_lowercase();
+    let mut recent: Vec<IssueShort> = issues
+        .iter()
+        .filter(|i| i.author.to_lowercase() == username_lower)
+        .map(|i| {
+            let mut labels = Vec::new();
+            if i.has_valid_label {
+                labels.push(alloc::string::String::from("valid"));
+            }
+            if i.has_invalid_label {
+                labels.push(alloc::string::String::from("invalid"));
+            }
+            if i.has_duplicate_label {
+                labels.push(alloc::string::String::from("duplicate"));
+            }
+            if i.has_ide_label {
+                labels.push(alloc::string::String::from("ide"));
+            }
+            let state = if i.is_closed {
+                alloc::string::String::from("closed")
+            } else {
+                alloc::string::String::from("open")
+            };
+            let mut url = alloc::string::String::from("https://github.com/");
+            url.push_str(&i.repo_owner);
+            url.push('/');
+            url.push_str(&i.repo_name);
+            url.push_str("/issues/");
+            let _ = core::fmt::Write::write_fmt(&mut url, format_args!("{}", i.issue_number));
+
+            IssueShort {
+                issue_id: i.issue_number,
+                repo_owner: i.repo_owner.clone(),
+                repo_name: i.repo_name.clone(),
+                title: alloc::string::String::new(),
+                state,
+                labels,
+                updated_at: alloc::string::String::new(),
+                issue_url: url,
+            }
+        })
+        .collect();
+    recent.sort_by(|a, b| b.issue_id.cmp(&a.issue_id));
+
+    let mut registered_at = alloc::string::String::new();
+    let _ =
+        core::fmt::Write::write_fmt(&mut registered_at, format_args!("{}", reg.registered_epoch));
+
+    let is_penalized = balance.is_penalized;
+    let details = HotkeyDetailsResponse {
+        hotkey: to_ss58(hotkey),
+        github_username: reg.github_username,
+        registered_at,
+        valid_issues: balance.valid_count,
+        invalid_issues: balance.invalid_count,
+        duplicate_issues: balance.duplicate_count,
+        total_points,
+        penalty_points,
+        net_points: net,
         balance,
+        is_penalized,
         weight,
+        recent_issues: recent,
     };
-    json_response(&status)
+    json_response(&details)
 }
 
 pub fn handle_issues_stats(_request: &WasmRouteRequest) -> WasmRouteResponse {
@@ -447,7 +513,7 @@ pub fn handle_github_user(request: &WasmRouteRequest) -> WasmRouteResponse {
 
     let details = GitHubUserDetailsResponse {
         github_username: alloc::string::String::from(username),
-        hotkey,
+        hotkey: hotkey.map(|h| to_ss58(&h)),
         registered_at,
         total_issues,
         valid_issues,
@@ -559,7 +625,7 @@ pub fn handle_sudo_register_user(request: &WasmRouteRequest) -> WasmRouteRespons
         scoring::rebuild_leaderboard();
         json_response(&serde_json::json!({
             "success": true,
-            "hotkey": req.hotkey,
+            "hotkey": to_ss58(&req.hotkey),
             "github_username": req.github_username
         }))
     } else {

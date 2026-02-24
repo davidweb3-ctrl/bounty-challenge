@@ -124,14 +124,6 @@ pub fn record_valid_issue(
     let hotkey_ss58 = normalize_hotkey_for_storage(hotkey);
     let key = issue_key(repo_owner, repo_name, issue_number);
 
-    // Check if issue already recorded (idempotent — consensus ensures
-    // only committed writes are visible, so duplicate proposals are harmless)
-    if let Ok(data) = host_storage_get(&key) {
-        if !data.is_empty() {
-            return false;
-        }
-    }
-
     let epoch = host_consensus_get_epoch();
     let current_epoch = if epoch >= 0 { epoch as u64 } else { 0 };
 
@@ -146,6 +138,7 @@ pub fn record_valid_issue(
         has_ide_label: true,
         claimed_by_hotkey: Some(hotkey_ss58.clone()),
         recorded_epoch: current_epoch,
+        has_duplicate_label: false,
     };
 
     let data = match bincode::serialize(&record) {
@@ -209,10 +202,69 @@ pub fn record_invalid_issue(
         has_ide_label: false,
         claimed_by_hotkey: hotkey,
         recorded_epoch: current_epoch,
+        has_duplicate_label: false,
     };
     let key = issue_key(repo_owner, repo_name, issue_number);
     if let Ok(data) = bincode::serialize(&issue_record) {
         let _ = host_storage_set(&key, &data);
+    }
+
+    true
+}
+
+pub fn record_duplicate_issue(
+    issue_number: u32,
+    repo_owner: &str,
+    repo_name: &str,
+    github_username: &str,
+    hotkey: &str,
+) -> bool {
+    let hotkey_ss58 = normalize_hotkey_for_storage(hotkey);
+    let key = issue_key(repo_owner, repo_name, issue_number);
+
+    let epoch = host_consensus_get_epoch();
+    let current_epoch = if epoch >= 0 { epoch as u64 } else { 0 };
+
+    let record = IssueRecord {
+        issue_number,
+        repo_owner: String::from(repo_owner),
+        repo_name: String::from(repo_name),
+        author: String::from(github_username),
+        is_closed: true,
+        has_valid_label: false,
+        has_invalid_label: false,
+        has_ide_label: false,
+        claimed_by_hotkey: Some(hotkey_ss58),
+        recorded_epoch: current_epoch,
+        has_duplicate_label: true,
+    };
+
+    let data = match bincode::serialize(&record) {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+
+    if host_storage_set(&key, &data).is_err() {
+        return false;
+    }
+
+    // Also write an InvalidIssueRecord so recount picks it up
+    let inv_record = InvalidIssueRecord {
+        issue_number,
+        repo_owner: String::from(repo_owner),
+        repo_name: String::from(repo_name),
+        github_username: String::from(github_username),
+        reason: Some(String::from("Issue marked duplicate")),
+        recorded_epoch: current_epoch,
+    };
+    let mut inv_key = Vec::from(b"invalid_issue:" as &[u8]);
+    inv_key.extend_from_slice(repo_owner.as_bytes());
+    inv_key.push(b'/');
+    inv_key.extend_from_slice(repo_name.as_bytes());
+    inv_key.push(b':');
+    inv_key.extend_from_slice(&issue_number.to_le_bytes());
+    if let Ok(inv_data) = bincode::serialize(&inv_record) {
+        let _ = host_storage_set(&inv_key, &inv_data);
     }
 
     true
