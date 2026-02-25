@@ -126,6 +126,7 @@ pub fn handle_status(request: &WasmRouteRequest) -> WasmRouteResponse {
         balance.valid_count,
         balance.invalid_count,
         balance.duplicate_count,
+        balance.malicious_count,
         balance.star_count,
     );
     let weight = if storage::is_banned(hotkey) || net <= 0.0 {
@@ -327,6 +328,7 @@ pub fn handle_hotkey_details(request: &WasmRouteRequest) -> WasmRouteResponse {
         balance.valid_count,
         balance.invalid_count,
         balance.duplicate_count,
+        balance.malicious_count,
         balance.star_count,
     );
     let weight = if storage::is_banned(hotkey) || net <= 0.0 {
@@ -651,7 +653,16 @@ pub fn handle_sudo_sync_github(request: &WasmRouteRequest) -> WasmRouteResponse 
         return json_error(403, "forbidden", "Only the sudo owner can trigger sync");
     }
 
-    let stats = crate::github_sync::fetch_and_process_issues();
+    let github_token: Option<alloc::string::String> =
+        serde_json::from_slice::<serde_json::Value>(&request.body)
+            .ok()
+            .and_then(|v| {
+                v.get("github_token")
+                    .and_then(|t| t.as_str())
+                    .map(alloc::string::String::from)
+            });
+
+    let stats = crate::github_sync::fetch_and_process_issues_with_token(github_token.as_deref());
     scoring::rebuild_leaderboard();
 
     json_response(&serde_json::json!({

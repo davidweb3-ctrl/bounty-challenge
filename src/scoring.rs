@@ -25,17 +25,15 @@ pub fn calculate_net_points(
     valid_count: u32,
     invalid_count: u32,
     duplicate_count: u32,
+    malicious_count: u32,
     star_count: u32,
 ) -> f64 {
-    let issue_points = valid_count as f64;
+    let valid = valid_count as f64;
+    let invalid = invalid_count as f64;
+    let duplicate = duplicate_count as f64 * 0.5;
+    let malicious = malicious_count as f64 * 5.0;
     let star_points = star_count as f64 * STAR_BONUS_PER_REPO;
-    let total_negative = invalid_count.saturating_add(duplicate_count);
-    let penalty = if total_negative > valid_count {
-        (total_negative - valid_count) as f64
-    } else {
-        0.0
-    };
-    (issue_points + star_points - penalty).max(0.0)
+    (valid - invalid - duplicate - malicious + star_points).max(0.0)
 }
 
 pub fn calculate_weights_from_leaderboard(entries: &[LeaderboardEntry]) -> Vec<WeightAssignment> {
@@ -95,9 +93,10 @@ pub fn rebuild_leaderboard() {
             balance.valid_count,
             balance.invalid_count,
             balance.duplicate_count,
+            balance.malicious_count,
             balance.star_count,
         );
-        let score = calculate_weight_from_points(balance.valid_count, balance.star_count);
+        let score = net_points * WEIGHT_PER_POINT;
 
         let epoch = platform_challenge_sdk_wasm::host_functions::host_consensus_get_epoch();
         let current_epoch = if epoch >= 0 { epoch as u64 } else { 0 };
@@ -115,6 +114,8 @@ pub fn rebuild_leaderboard() {
             net_points,
             is_penalized: balance.is_penalized,
             last_epoch: current_epoch,
+            duplicate_issues: balance.duplicate_count,
+            malicious_issues: balance.malicious_count,
         });
     }
 

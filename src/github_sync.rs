@@ -7,7 +7,7 @@ use crate::storage;
 
 const GITHUB_REPO_OWNER: &str = "PlatformNetwork";
 const GITHUB_REPO_NAME: &str = "bounty-challenge";
-const MIN_ISSUES_TO_FETCH: usize = 1000;
+const MAX_PAGES: u32 = 500;
 const ISSUES_PER_PAGE: usize = 100;
 const SECONDS_24H: i64 = 86_400;
 
@@ -31,6 +31,7 @@ struct GitHubIssue {
     pub user: Option<GitHubUser>,
     pub labels: Vec<GitHubLabel>,
     pub state: String,
+    pub created_at: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -50,7 +51,7 @@ pub struct SyncStats {
     pub last_error: Option<String>,
 }
 
-fn http_get(url: &str) -> Option<Vec<u8>> {
+fn http_get(url: &str, github_token: Option<&str>) -> Option<Vec<u8>> {
     let mut headers = BTreeMap::new();
     headers.insert(
         String::from("Accept"),
@@ -60,6 +61,12 @@ fn http_get(url: &str) -> Option<Vec<u8>> {
         String::from("User-Agent"),
         String::from("platform-validator"),
     );
+    if let Some(token) = github_token {
+        headers.insert(
+            String::from("Authorization"),
+            alloc::format!("Bearer {}", token),
+        );
+    }
 
     let req = HttpGetRequest {
         url: String::from(url),
@@ -128,6 +135,10 @@ fn days_to_ymd(days_since_epoch: i64) -> (i64, i64, i64) {
 }
 
 pub fn fetch_and_process_issues() -> SyncStats {
+    fetch_and_process_issues_with_token(None)
+}
+
+pub fn fetch_and_process_issues_with_token(github_token: Option<&str>) -> SyncStats {
     let mut stats = SyncStats {
         fetched: 0,
         awarded: 0,
@@ -137,19 +148,19 @@ pub fn fetch_and_process_issues() -> SyncStats {
 
     let since = build_since_param();
     let mut all_issues: Vec<GitHubIssue> = Vec::new();
+    let mut hit_old_issue = false;
 
-    // Fetch pages until we have at least MIN_ISSUES_TO_FETCH or no more results
     let mut page = 1u32;
     loop {
         let mut url = String::from("https://api.github.com/repos/");
         use core::fmt::Write;
         let _ = write!(
             url,
-            "{}/{}/issues?state=all&sort=updated&direction=desc&per_page={}&page={}&since={}",
-            GITHUB_REPO_OWNER, GITHUB_REPO_NAME, ISSUES_PER_PAGE, page, since
+            "{}/{}/issues?state=all&sort=created&direction=desc&per_page={}&page={}",
+            GITHUB_REPO_OWNER, GITHUB_REPO_NAME, ISSUES_PER_PAGE, page
         );
 
-        let body = match http_get(&url) {
+        let body = match http_get(&url, github_token) {
             Some(b) => b,
             None => break,
         };
@@ -168,17 +179,27 @@ pub fn fetch_and_process_issues() -> SyncStats {
         };
 
         let count = issues.len();
-        all_issues.extend(issues);
 
-        // Stop if last page (fewer results than page size)
-        if count < ISSUES_PER_PAGE {
-            break;
+        for issue in issues {
+            let dominated = issue
+                .created_at
+                .as_deref()
+                .map(|ca| ca < since.as_str())
+                .unwrap_or(false);
+            if dominated {
+                hit_old_issue = true;
+                break;
+            }
+            all_issues.push(issue);
         }
-        // Stop once we have enough
-        if all_issues.len() >= MIN_ISSUES_TO_FETCH {
+
+        if hit_old_issue || count < ISSUES_PER_PAGE {
             break;
         }
         page += 1;
+        if page > MAX_PAGES {
+            break;
+        }
     }
 
     stats.fetched = all_issues.len() as u32;
@@ -195,15 +216,14 @@ pub fn fetch_and_process_issues() -> SyncStats {
         let label_names: Vec<String> = issue.labels.iter().map(|l| l.name.to_lowercase()).collect();
         let has_valid = label_names.iter().any(|l| l == "valid");
         let has_invalid = label_names.iter().any(|l| l == "invalid");
-        let has_duplicate = label_names.iter().any(|l| l == "duplicate");
-        let has_ide = label_names.iter().any(|l| l == "ide");
+        let has_duplicate = label_names
+            .iter()
+            .any(|l| l == "duplicate" || l == "duplicated");
+        let has_malicious = label_names.iter().any(|l| l == "malicious");
         let is_closed = issue.state == "closed";
 
-        // Only process issues that have the "ide" label and a relevant status label
-        if !has_ide {
-            continue;
-        }
-        if !has_valid && !has_invalid && !has_duplicate {
+        // Skip issues without any relevant label
+        if !has_valid && !has_invalid && !has_duplicate && !has_malicious {
             continue;
         }
 
@@ -216,15 +236,14 @@ pub fn fetch_and_process_issues() -> SyncStats {
         // Always overwrite existing records to fix any corrupted data
         storage::delete_issue_record(GITHUB_REPO_OWNER, GITHUB_REPO_NAME, issue.number);
 
-        if has_valid && has_ide {
-            if storage::record_valid_issue(
+        if has_malicious {
+            if storage::record_malicious_issue(
                 issue.number,
                 GITHUB_REPO_OWNER,
                 GITHUB_REPO_NAME,
                 &author,
-                &hotkey,
             ) {
-                stats.awarded += 1;
+                stats.penalized += 1;
             }
         } else if has_invalid {
             let reason = if !is_closed {
@@ -241,8 +260,18 @@ pub fn fetch_and_process_issues() -> SyncStats {
             ) {
                 stats.penalized += 1;
             }
-        } else if has_duplicate
-            && storage::record_duplicate_issue(
+        } else if has_duplicate {
+            if storage::record_duplicate_issue(
+                issue.number,
+                GITHUB_REPO_OWNER,
+                GITHUB_REPO_NAME,
+                &author,
+                &hotkey,
+            ) {
+                stats.penalized += 1;
+            }
+        } else if has_valid
+            && storage::record_valid_issue(
                 issue.number,
                 GITHUB_REPO_OWNER,
                 GITHUB_REPO_NAME,
@@ -250,7 +279,7 @@ pub fn fetch_and_process_issues() -> SyncStats {
                 &hotkey,
             )
         {
-            stats.penalized += 1;
+            stats.awarded += 1;
         }
     }
 

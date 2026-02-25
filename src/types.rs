@@ -52,6 +52,8 @@ pub struct IssueRecord {
     pub recorded_epoch: u64,
     #[serde(default)]
     pub has_duplicate_label: bool,
+    #[serde(default)]
+    pub has_malicious_label: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -71,6 +73,8 @@ pub struct UserBalance {
     pub duplicate_count: u32,
     pub star_count: u32,
     pub is_penalized: bool,
+    #[serde(default)]
+    pub malicious_count: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -87,6 +91,10 @@ pub struct LeaderboardEntry {
     pub net_points: f64,
     pub is_penalized: bool,
     pub last_epoch: u64,
+    #[serde(default)]
+    pub duplicate_issues: u32,
+    #[serde(default)]
+    pub malicious_issues: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

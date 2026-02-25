@@ -3,13 +3,14 @@ use alloc::vec::Vec;
 use platform_challenge_sdk_wasm::host_functions::{
     host_consensus_get_epoch, host_storage_get, host_storage_list_prefix, host_storage_set,
 };
+use serde::Deserialize;
 
 use crate::ss58;
 use crate::types::{
     InvalidIssueRecord, IssueRecord, LeaderboardEntry, UserBalance, UserRegistration,
 };
 
-const MAX_SYNCED_ISSUES: usize = 50_000;
+const MAX_SYNCED_ISSUES: usize = 500_000;
 
 fn make_key(prefix: &[u8], suffix: &str) -> Vec<u8> {
     let mut key = Vec::from(prefix);
@@ -139,6 +140,7 @@ pub fn record_valid_issue(
         claimed_by_hotkey: Some(hotkey_ss58.clone()),
         recorded_epoch: current_epoch,
         has_duplicate_label: false,
+        has_malicious_label: false,
     };
 
     let data = match bincode::serialize(&record) {
@@ -203,6 +205,7 @@ pub fn record_invalid_issue(
         claimed_by_hotkey: hotkey,
         recorded_epoch: current_epoch,
         has_duplicate_label: false,
+        has_malicious_label: false,
     };
     let key = issue_key(repo_owner, repo_name, issue_number);
     if let Ok(data) = bincode::serialize(&issue_record) {
@@ -237,6 +240,7 @@ pub fn record_duplicate_issue(
         claimed_by_hotkey: Some(hotkey_ss58),
         recorded_epoch: current_epoch,
         has_duplicate_label: true,
+        has_malicious_label: false,
     };
 
     let data = match bincode::serialize(&record) {
@@ -270,6 +274,56 @@ pub fn record_duplicate_issue(
     true
 }
 
+pub fn record_malicious_issue(
+    issue_number: u32,
+    repo_owner: &str,
+    repo_name: &str,
+    github_username: &str,
+) -> bool {
+    let epoch = host_consensus_get_epoch();
+    let current_epoch = if epoch >= 0 { epoch as u64 } else { 0 };
+
+    let hotkey = get_hotkey_by_github(github_username);
+    let record = IssueRecord {
+        issue_number,
+        repo_owner: String::from(repo_owner),
+        repo_name: String::from(repo_name),
+        author: String::from(github_username),
+        is_closed: true,
+        has_valid_label: false,
+        has_invalid_label: false,
+        has_ide_label: false,
+        claimed_by_hotkey: hotkey,
+        recorded_epoch: current_epoch,
+        has_duplicate_label: false,
+        has_malicious_label: true,
+    };
+    let key = issue_key(repo_owner, repo_name, issue_number);
+    if let Ok(data) = bincode::serialize(&record) {
+        let _ = host_storage_set(&key, &data);
+    }
+
+    let mut mal_key = Vec::from(b"malicious_issue:" as &[u8]);
+    mal_key.extend_from_slice(repo_owner.as_bytes());
+    mal_key.push(b'/');
+    mal_key.extend_from_slice(repo_name.as_bytes());
+    mal_key.push(b':');
+    mal_key.extend_from_slice(&issue_number.to_le_bytes());
+    let inv_record = InvalidIssueRecord {
+        issue_number,
+        repo_owner: String::from(repo_owner),
+        repo_name: String::from(repo_name),
+        github_username: String::from(github_username),
+        reason: Some(String::from("Issue marked malicious")),
+        recorded_epoch: current_epoch,
+    };
+    if let Ok(data) = bincode::serialize(&inv_record) {
+        let _ = host_storage_set(&mal_key, &data);
+    }
+
+    true
+}
+
 pub fn is_issue_recorded(repo_owner: &str, repo_name: &str, issue_number: u32) -> bool {
     let key = issue_key(repo_owner, repo_name, issue_number);
     if let Ok(data) = host_storage_get(&key) {
@@ -288,7 +342,7 @@ pub fn get_issue_record(
     if data.is_empty() {
         return None;
     }
-    bincode::deserialize(&data).ok()
+    deserialize_issue_record(&data)
 }
 
 pub fn delete_issue_record(repo_owner: &str, repo_name: &str, issue_number: u32) {
@@ -303,6 +357,45 @@ pub fn delete_issue_record(repo_owner: &str, repo_name: &str, issue_number: u32)
     inv_key.push(b':');
     inv_key.extend_from_slice(&issue_number.to_le_bytes());
     let _ = host_storage_set(&inv_key, &[]);
+
+    let mut mal_key = Vec::from(b"malicious_issue:" as &[u8]);
+    mal_key.extend_from_slice(repo_owner.as_bytes());
+    mal_key.push(b'/');
+    mal_key.extend_from_slice(repo_name.as_bytes());
+    mal_key.push(b':');
+    mal_key.extend_from_slice(&issue_number.to_le_bytes());
+    let _ = host_storage_set(&mal_key, &[]);
+}
+
+/// Legacy struct without malicious_count for bincode compat
+#[derive(Clone, Debug, Deserialize)]
+struct LegacyUserBalance {
+    pub valid_count: u32,
+    pub invalid_count: u32,
+    pub duplicate_count: u32,
+    pub star_count: u32,
+    pub is_penalized: bool,
+}
+
+impl LegacyUserBalance {
+    fn into_current(self) -> UserBalance {
+        UserBalance {
+            valid_count: self.valid_count,
+            invalid_count: self.invalid_count,
+            duplicate_count: self.duplicate_count,
+            star_count: self.star_count,
+            is_penalized: self.is_penalized,
+            malicious_count: 0,
+        }
+    }
+}
+
+fn deserialize_user_balance(data: &[u8]) -> Option<UserBalance> {
+    bincode::deserialize::<UserBalance>(data).ok().or_else(|| {
+        bincode::deserialize::<LegacyUserBalance>(data)
+            .ok()
+            .map(|l| l.into_current())
+    })
 }
 
 pub fn get_user_balance(hotkey: &str) -> UserBalance {
@@ -312,7 +405,7 @@ pub fn get_user_balance(hotkey: &str) -> UserBalance {
         if d.is_empty() {
             None
         } else {
-            bincode::deserialize(&d).ok()
+            deserialize_user_balance(&d)
         }
     });
 
@@ -325,7 +418,7 @@ pub fn get_user_balance(hotkey: &str) -> UserBalance {
                 if d.is_empty() {
                     None
                 } else {
-                    bincode::deserialize(&d).ok()
+                    deserialize_user_balance(&d)
                 }
             })
             .unwrap_or_default();
@@ -346,11 +439,8 @@ pub fn increment_duplicate_count(hotkey: &str) {
     let hotkey_ss58 = normalize_hotkey_for_storage(hotkey);
     let mut balance = get_user_balance(&hotkey_ss58);
     balance.duplicate_count = balance.duplicate_count.saturating_add(1);
-    let penalty = (balance
-        .invalid_count
-        .saturating_add(balance.duplicate_count))
-    .saturating_sub(balance.valid_count);
-    balance.is_penalized = penalty > 0;
+    let penalty_points = balance.invalid_count as f64 + balance.duplicate_count as f64 * 0.5;
+    balance.is_penalized = penalty_points > 0.0;
     store_user_balance(&hotkey_ss58, &balance);
 }
 
@@ -358,29 +448,29 @@ pub fn increment_duplicate_count(hotkey: &str) {
 pub fn recount_all_balances() -> serde_json::Value {
     use alloc::collections::BTreeMap;
 
-    let valid_issues = get_synced_issues();
+    let all_issues = get_synced_issues();
     let mut valid_counts: BTreeMap<String, u32> = BTreeMap::new();
     let mut invalid_counts: BTreeMap<String, u32> = BTreeMap::new();
+    let mut duplicate_counts: BTreeMap<String, u32> = BTreeMap::new();
+    let mut malicious_counts: BTreeMap<String, u32> = BTreeMap::new();
 
-    for issue in &valid_issues {
-        if let Some(ref hotkey) = issue.claimed_by_hotkey {
-            if !hotkey.is_empty() && issue.has_valid_label && issue.has_ide_label {
-                *valid_counts.entry(hotkey.clone()).or_insert(0) += 1;
-            }
-        }
-    }
+    for issue in &all_issues {
+        let hotkey = match &issue.claimed_by_hotkey {
+            Some(h) if !h.is_empty() => h.clone(),
+            _ => match get_hotkey_by_github(&issue.author) {
+                Some(h) => h,
+                None => continue,
+            },
+        };
 
-    // Scan invalid issues
-    if let Ok(data) = host_storage_list_prefix(b"invalid_issue:", 50_000) {
-        if !data.is_empty() {
-            let pairs = decode_list_prefix(&data);
-            for (_k, v) in &pairs {
-                if let Ok(rec) = bincode::deserialize::<InvalidIssueRecord>(v) {
-                    if let Some(hotkey) = get_hotkey_by_github(&rec.github_username) {
-                        *invalid_counts.entry(hotkey).or_insert(0) += 1;
-                    }
-                }
-            }
+        if issue.has_malicious_label {
+            *malicious_counts.entry(hotkey.clone()).or_insert(0) += 1;
+        } else if issue.has_invalid_label {
+            *invalid_counts.entry(hotkey.clone()).or_insert(0) += 1;
+        } else if issue.has_duplicate_label {
+            *duplicate_counts.entry(hotkey.clone()).or_insert(0) += 1;
+        } else if issue.has_valid_label {
+            *valid_counts.entry(hotkey.clone()).or_insert(0) += 1;
         }
     }
 
@@ -391,7 +481,12 @@ pub fn recount_all_balances() -> serde_json::Value {
     for k in invalid_counts.keys() {
         all_hotkeys.insert(k.clone(), true);
     }
-    // Also include all registered hotkeys so we reset stale balances
+    for k in duplicate_counts.keys() {
+        all_hotkeys.insert(k.clone(), true);
+    }
+    for k in malicious_counts.keys() {
+        all_hotkeys.insert(k.clone(), true);
+    }
     for hk in get_registered_hotkeys() {
         all_hotkeys.insert(hk, true);
     }
@@ -399,28 +494,28 @@ pub fn recount_all_balances() -> serde_json::Value {
     let mut updated = 0u32;
     for hotkey in all_hotkeys.keys() {
         let mut balance = UserBalance::default();
-        // Preserve star_count and duplicate_count from existing balance
         let old = get_user_balance(hotkey);
         balance.star_count = old.star_count;
-        balance.duplicate_count = old.duplicate_count;
 
         balance.valid_count = valid_counts.get(hotkey).copied().unwrap_or(0);
         balance.invalid_count = invalid_counts.get(hotkey).copied().unwrap_or(0);
-        let penalty = (balance
-            .invalid_count
-            .saturating_add(balance.duplicate_count))
-        .saturating_sub(balance.valid_count);
-        balance.is_penalized = penalty > 0;
+        balance.duplicate_count = duplicate_counts.get(hotkey).copied().unwrap_or(0);
+        balance.malicious_count = malicious_counts.get(hotkey).copied().unwrap_or(0);
+        let penalty_points = balance.invalid_count as f64
+            + balance.duplicate_count as f64 * 0.5
+            + balance.malicious_count as f64 * 5.0;
+        balance.is_penalized = penalty_points > 0.0;
         store_user_balance(hotkey, &balance);
         updated += 1;
     }
 
     serde_json::json!({
         "success": true,
-        "valid_issues_scanned": valid_issues.len(),
+        "total_issues_scanned": all_issues.len(),
         "hotkeys_updated": updated,
         "unique_valid_hotkeys": valid_counts.len(),
-        "unique_invalid_hotkeys": invalid_counts.len()
+        "unique_invalid_hotkeys": invalid_counts.len(),
+        "unique_malicious_hotkeys": malicious_counts.len()
     })
 }
 
@@ -504,15 +599,58 @@ pub fn store_issue_data(issues: &[IssueRecord]) -> bool {
     false
 }
 
+/// Legacy struct without has_malicious_label for bincode compat
+#[derive(Clone, Debug, Deserialize)]
+struct LegacyIssueRecord {
+    pub issue_number: u32,
+    pub repo_owner: String,
+    pub repo_name: String,
+    pub author: String,
+    pub is_closed: bool,
+    pub has_valid_label: bool,
+    pub has_invalid_label: bool,
+    pub has_ide_label: bool,
+    pub claimed_by_hotkey: Option<String>,
+    pub recorded_epoch: u64,
+    pub has_duplicate_label: bool,
+}
+
+impl LegacyIssueRecord {
+    fn into_current(self) -> IssueRecord {
+        IssueRecord {
+            issue_number: self.issue_number,
+            repo_owner: self.repo_owner,
+            repo_name: self.repo_name,
+            author: self.author,
+            is_closed: self.is_closed,
+            has_valid_label: self.has_valid_label,
+            has_invalid_label: self.has_invalid_label,
+            has_ide_label: self.has_ide_label,
+            claimed_by_hotkey: self.claimed_by_hotkey,
+            recorded_epoch: self.recorded_epoch,
+            has_duplicate_label: self.has_duplicate_label,
+            has_malicious_label: false,
+        }
+    }
+}
+
+fn deserialize_issue_record(data: &[u8]) -> Option<IssueRecord> {
+    bincode::deserialize::<IssueRecord>(data).ok().or_else(|| {
+        bincode::deserialize::<LegacyIssueRecord>(data)
+            .ok()
+            .map(|l| l.into_current())
+    })
+}
+
 pub fn get_synced_issues() -> Vec<IssueRecord> {
     // Try indexed storage first (issue: prefix)
-    if let Ok(data) = host_storage_list_prefix(b"issue:", 50_000) {
+    if let Ok(data) = host_storage_list_prefix(b"issue:", 500_000) {
         if !data.is_empty() {
             let pairs = decode_list_prefix(&data);
             if !pairs.is_empty() {
                 return pairs
                     .into_iter()
-                    .filter_map(|(_k, v)| bincode::deserialize::<IssueRecord>(&v).ok())
+                    .filter_map(|(_k, v)| deserialize_issue_record(&v))
                     .collect();
             }
         }
