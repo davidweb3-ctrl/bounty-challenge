@@ -14,10 +14,9 @@ mod validation;
 use alloc::string::String;
 use alloc::vec::Vec;
 use bincode::Options;
-use platform_challenge_sdk_wasm::host_functions::host_storage_get;
 use platform_challenge_sdk_wasm::{Challenge, EvaluationInput, EvaluationOutput, WasmRouteRequest};
 
-use crate::types::{BountySubmission, LeaderboardEntry};
+use crate::types::BountySubmission;
 
 const MAX_SUBMISSION_SIZE: u64 = 4 * 1024 * 1024;
 const MAX_ROUTE_REQUEST_SIZE: u64 = 1024 * 1024;
@@ -142,18 +141,12 @@ impl Challenge for BountyChallengeWasm {
     }
 
     fn get_weights(&self) -> Vec<u8> {
-        let entries: Vec<LeaderboardEntry> = host_storage_get(b"leaderboard")
-            .ok()
-            .and_then(|d| {
-                if d.is_empty() {
-                    None
-                } else {
-                    bincode::deserialize(&d).ok()
-                }
-            })
-            .unwrap_or_default();
-
-        let weights = scoring::calculate_weights_from_leaderboard(&entries);
+        // Compute weights deterministically from P2P-consensus storage.
+        // We recount balances in-memory from the committed issues (not from
+        // stored balances which may differ between validators due to write lag).
+        // This ensures all validators with the same committed issues produce
+        // identical weights, which is critical for vTrust convergence.
+        let weights = scoring::compute_weights_from_issues();
         bincode::serialize(&weights).unwrap_or_default()
     }
 

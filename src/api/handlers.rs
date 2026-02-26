@@ -78,9 +78,9 @@ fn get_param<'a>(request: &'a WasmRouteRequest, name: &str) -> Option<&'a str> {
 }
 
 pub fn handle_leaderboard(_request: &WasmRouteRequest) -> WasmRouteResponse {
-    // Rebuild leaderboard dynamically from registered hotkeys
-    scoring::rebuild_leaderboard();
-    let entries = storage::get_leaderboard();
+    // Rebuild leaderboard dynamically and use the returned entries directly
+    // (P2P storage write may not have landed yet).
+    let entries = scoring::rebuild_leaderboard();
     json_response(&entries)
 }
 
@@ -527,7 +527,7 @@ pub fn handle_github_user(request: &WasmRouteRequest) -> WasmRouteResponse {
 }
 
 pub fn handle_get_weights(_request: &WasmRouteRequest) -> WasmRouteResponse {
-    let entries = storage::get_leaderboard();
+    let entries = scoring::rebuild_leaderboard();
     let weights = scoring::calculate_weights_from_leaderboard(&entries);
     json_response(&weights)
 }
@@ -663,8 +663,11 @@ pub fn handle_sudo_sync_github(request: &WasmRouteRequest) -> WasmRouteResponse 
             });
 
     let stats = crate::github_sync::fetch_and_process_issues_with_token(github_token.as_deref());
-    storage::recount_all_balances();
-    scoring::rebuild_leaderboard();
+    // DO NOT call recount_all_balances() or rebuild_leaderboard() here.
+    // The issue records written by fetch_and_process_issues go through P2P
+    // consensus and have not landed yet. Calling recount now would read zero
+    // issues and overwrite all balances with zeros.
+    // Instead, recount and rebuild happen automatically on the next sync() cycle.
 
     json_response(&serde_json::json!({
         "success": true,

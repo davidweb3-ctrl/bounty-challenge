@@ -36,6 +36,73 @@ pub fn calculate_net_points(
     (valid - invalid - duplicate - malicious + star_points).max(0.0)
 }
 
+/// Compute weights deterministically from committed issues in P2P storage.
+/// Does NOT read or write balances -- recomputes everything in-memory from
+/// the issue records. This ensures all validators with the same committed
+/// issues produce identical weight vectors (critical for vTrust).
+pub fn compute_weights_from_issues() -> Vec<WeightAssignment> {
+    use alloc::collections::BTreeMap;
+
+    let all_issues = storage::get_synced_issues();
+    let hotkeys = storage::get_registered_hotkeys();
+
+    // Recount balances in-memory (not from stored balances)
+    let mut valid_counts: BTreeMap<String, u32> = BTreeMap::new();
+    let mut invalid_counts: BTreeMap<String, u32> = BTreeMap::new();
+    let mut duplicate_counts: BTreeMap<String, u32> = BTreeMap::new();
+    let mut malicious_counts: BTreeMap<String, u32> = BTreeMap::new();
+
+    for issue in &all_issues {
+        let hotkey = match &issue.claimed_by_hotkey {
+            Some(h) if !h.is_empty() => h.clone(),
+            _ => match storage::get_hotkey_by_github(&issue.author) {
+                Some(h) => h,
+                None => continue,
+            },
+        };
+
+        if issue.has_malicious_label {
+            *malicious_counts.entry(hotkey).or_insert(0) += 1;
+        } else if issue.has_invalid_label {
+            *invalid_counts.entry(hotkey).or_insert(0) += 1;
+        } else if issue.has_duplicate_label {
+            *duplicate_counts.entry(hotkey).or_insert(0) += 1;
+        } else if issue.has_valid_label {
+            *valid_counts.entry(hotkey).or_insert(0) += 1;
+        }
+    }
+
+    // Build leaderboard entries in-memory
+    let mut entries = Vec::with_capacity(hotkeys.len());
+    for hotkey in &hotkeys {
+        let hk = crate::ss58::normalize_hotkey(hotkey).unwrap_or_else(|| hotkey.clone());
+        let valid = valid_counts.get(&hk).copied().unwrap_or(0);
+        let invalid = invalid_counts.get(&hk).copied().unwrap_or(0);
+        let duplicate = duplicate_counts.get(&hk).copied().unwrap_or(0);
+        let malicious = malicious_counts.get(&hk).copied().unwrap_or(0);
+
+        let net_points = calculate_net_points(valid, invalid, duplicate, malicious, 0);
+        entries.push(LeaderboardEntry {
+            rank: 0,
+            hotkey: hk,
+            github_username: String::new(),
+            score: 0.0,
+            valid_issues: valid,
+            invalid_issues: invalid,
+            pending_issues: 0,
+            star_count: 0,
+            star_bonus: 0.0,
+            net_points,
+            is_penalized: false,
+            last_epoch: 0,
+            duplicate_issues: duplicate,
+            malicious_issues: malicious,
+        });
+    }
+
+    calculate_weights_from_leaderboard(&entries)
+}
+
 pub fn calculate_weights_from_leaderboard(entries: &[LeaderboardEntry]) -> Vec<WeightAssignment> {
     let mut weights: Vec<WeightAssignment> = entries
         .iter()
@@ -81,7 +148,12 @@ pub fn calculate_weights_from_leaderboard(entries: &[LeaderboardEntry]) -> Vec<W
     weights
 }
 
-pub fn rebuild_leaderboard() {
+/// Rebuild the leaderboard from registered hotkeys and their balances.
+/// Returns the computed entries directly AND writes them to storage (P2P consensus).
+/// Callers that need the result immediately (sync, get_weights) should use
+/// the returned value instead of reading back from storage, because the P2P
+/// write may not have landed yet.
+pub fn rebuild_leaderboard() -> Vec<LeaderboardEntry> {
     let hotkeys = storage::get_registered_hotkeys();
     let mut entries = Vec::with_capacity(hotkeys.len());
 
@@ -130,20 +202,29 @@ pub fn rebuild_leaderboard() {
     }
 
     storage::store_leaderboard(&entries);
+    entries
 }
 
 /// Perform a full sync: rebuild leaderboard and return sync result for consensus
 pub fn perform_sync() -> SyncResult {
-    // Every 120 blocks, fetch GitHub issues and award/penalize
+    // Every 120 blocks, fetch GitHub issues and award/penalize.
+    // NOTE: recount_all_balances is called SEPARATELY (not right after
+    // fetch_and_process_issues) because issue writes go through P2P consensus
+    // and have not landed yet when recount runs.  Recount on every sync so
+    // that balances catch up with issues committed in previous cycles.
     let block = platform_challenge_sdk_wasm::host_functions::host_consensus_get_block_height();
     if block > 0 && block % 120 == 0 {
         crate::github_sync::fetch_and_process_issues();
-        storage::recount_all_balances();
     }
 
-    rebuild_leaderboard();
+    // Always recount from whatever issues are currently in storage.
+    // This catches issues committed from previous sync cycles.
+    storage::recount_all_balances();
 
-    let entries = storage::get_leaderboard();
+    // Use the returned entries directly -- the P2P write from
+    // rebuild_leaderboard may not have landed yet so a subsequent
+    // storage::get_leaderboard() would return stale data.
+    let entries = rebuild_leaderboard();
     let hotkeys = storage::get_registered_hotkeys();
 
     // Calculate totals
