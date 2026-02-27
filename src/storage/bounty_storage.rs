@@ -444,6 +444,20 @@ pub fn increment_duplicate_count(hotkey: &str) {
     store_user_balance(&hotkey_ss58, &balance);
 }
 
+/// Rebuild github:{username} -> hotkey index from user:{hotkey} records.
+/// Called at recount time to recover from missing github: keys.
+pub fn rebuild_github_index() {
+    let hotkeys = get_registered_hotkeys();
+    for hk in &hotkeys {
+        if let Some(reg) = get_user_by_hotkey(hk) {
+            if !reg.github_username.is_empty() {
+                let key = make_key(b"github:", &reg.github_username.to_lowercase());
+                let _ = host_storage_set(&key, reg.hotkey.as_bytes());
+            }
+        }
+    }
+}
+
 /// Recount all balances by scanning stored issues. Returns JSON summary.
 pub fn recount_all_balances() -> serde_json::Value {
     use alloc::collections::BTreeMap;
@@ -585,14 +599,8 @@ pub fn store_issue_data(issues: &[IssueRecord]) -> bool {
     } else {
         issues
     };
-    // Store each issue individually for indexed access
-    for issue in truncated {
-        let key = issue_key(&issue.repo_owner, &issue.repo_name, issue.issue_number);
-        if let Ok(data) = bincode::serialize(issue) {
-            let _ = host_storage_set(&key, &data);
-        }
-    }
-    // Also store the blob for backward compat
+    // Store as a single blob -- this is the only source of truth.
+    // Individual issue: records are no longer written to avoid stale accumulation.
     if let Ok(data) = bincode::serialize(truncated) {
         return host_storage_set(b"synced_issues", &data).is_ok();
     }
@@ -643,27 +651,23 @@ fn deserialize_issue_record(data: &[u8]) -> Option<IssueRecord> {
 }
 
 pub fn get_synced_issues() -> Vec<IssueRecord> {
-    // Try indexed storage first (issue: prefix)
-    if let Ok(data) = host_storage_list_prefix(b"issue:", 500_000) {
-        if !data.is_empty() {
-            let pairs = decode_list_prefix(&data);
-            if !pairs.is_empty() {
-                return pairs
-                    .into_iter()
-                    .filter_map(|(_k, v)| deserialize_issue_record(&v))
-                    .collect();
-            }
-        }
-    }
-
-    // Fallback: legacy blob
+    // Single source of truth: the synced_issues blob.
+    // Individual issue: records are legacy and must NOT be read to avoid
+    // stale data accumulation from P2P state sync.
     host_storage_get(b"synced_issues")
         .ok()
         .and_then(|d| {
             if d.is_empty() {
                 None
             } else {
-                bincode::deserialize(&d).ok()
+                bincode::deserialize::<Vec<IssueRecord>>(&d)
+                    .ok()
+                    .or_else(|| {
+                        // Try legacy format
+                        bincode::deserialize::<Vec<LegacyIssueRecord>>(&d)
+                            .ok()
+                            .map(|v| v.into_iter().map(|l| l.into_current()).collect())
+                    })
             }
         })
         .unwrap_or_default()

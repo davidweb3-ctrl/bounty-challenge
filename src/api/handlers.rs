@@ -663,17 +663,22 @@ pub fn handle_sudo_sync_github(request: &WasmRouteRequest) -> WasmRouteResponse 
             });
 
     let stats = crate::github_sync::fetch_and_process_issues_with_token(github_token.as_deref());
-    // DO NOT call recount_all_balances() or rebuild_leaderboard() here.
-    // The issue records written by fetch_and_process_issues go through P2P
-    // consensus and have not landed yet. Calling recount now would read zero
-    // issues and overwrite all balances with zeros.
-    // Instead, recount and rebuild happen automatically on the next sync() cycle.
+
+    // Verify blob read-back
+    let issues_readback = storage::get_synced_issues();
+
+    // Recount and rebuild
+    let recount = storage::recount_all_balances();
+    let leaderboard = crate::scoring::rebuild_leaderboard();
 
     json_response(&serde_json::json!({
         "success": true,
         "fetched": stats.fetched,
         "awarded": stats.awarded,
         "penalized": stats.penalized,
+        "leaderboard_entries": leaderboard.len(),
+        "recount": recount,
+        "issues_readback": issues_readback.len(),
         "error": stats.last_error
     }))
 }

@@ -9,7 +9,7 @@ const GITHUB_REPO_OWNER: &str = "PlatformNetwork";
 const GITHUB_REPO_NAME: &str = "bounty-challenge";
 const MAX_PAGES: u32 = 500;
 const ISSUES_PER_PAGE: usize = 100;
-const SECONDS_48H: i64 = 172_800;
+const SECONDS_72H: i64 = 259_200;
 
 #[derive(Serialize, Deserialize)]
 struct HttpGetRequest {
@@ -89,7 +89,7 @@ fn http_get(url: &str, github_token: Option<&str>) -> Option<Vec<u8>> {
 fn build_since_param() -> String {
     let now_ms = platform_challenge_sdk_wasm::host_functions::host_get_timestamp();
     let now = now_ms / 1000; // host_get_timestamp returns milliseconds
-    let since_ts = now - SECONDS_48H;
+    let since_ts = now - SECONDS_72H;
     // Format as ISO 8601: YYYY-MM-DDTHH:MM:SSZ
     let secs_per_day: i64 = 86400;
     let secs_per_hour: i64 = 3600;
@@ -194,10 +194,13 @@ pub fn fetch_and_process_issues_with_token(github_token: Option<&str>) -> SyncSt
 
     stats.fetched = all_issues.len() as u32;
 
-    // Do NOT purge all issues.  The &since= URL param already limits the
-    // GitHub response to issues updated in the last 24 h.  For each fetched
-    // issue we delete-then-rewrite its record, so label changes are picked
-    // up.  Issues older than 24 h that haven't changed stay untouched.
+    // Ensure github:{username} -> hotkey index is populated
+    storage::rebuild_github_index();
+
+    // Build the complete issue list from the 72h fetch, then overwrite the
+    // synced_issues blob in one shot so old issues never accumulate.
+    let epoch = platform_challenge_sdk_wasm::host_functions::host_consensus_get_epoch() as u64;
+    let mut records: Vec<crate::types::IssueRecord> = Vec::new();
 
     for issue in &all_issues {
         let author = match &issue.user {
@@ -214,68 +217,41 @@ pub fn fetch_and_process_issues_with_token(github_token: Option<&str>) -> SyncSt
         let has_malicious = label_names.iter().any(|l| l == "malicious");
         let is_closed = issue.state == "closed";
 
-        // Skip issues without any relevant label
         if !has_valid && !has_invalid && !has_duplicate && !has_malicious {
             continue;
         }
 
         // Find registered hotkey for this GitHub username
-        let hotkey = match storage::get_hotkey_by_github(&author) {
-            Some(h) => h,
-            None => continue,
-        };
+        let hotkey = storage::get_hotkey_by_github(&author);
 
-        // Always overwrite existing records to fix any corrupted data
-        storage::delete_issue_record(GITHUB_REPO_OWNER, GITHUB_REPO_NAME, issue.number);
-
-        if has_malicious {
-            if storage::record_malicious_issue(
-                issue.number,
-                GITHUB_REPO_OWNER,
-                GITHUB_REPO_NAME,
-                &author,
-            ) {
-                stats.penalized += 1;
-            }
-        } else if has_invalid {
-            let reason = if !is_closed {
-                "Issue marked invalid (not closed)"
-            } else {
-                "Issue marked invalid"
-            };
-            if storage::record_invalid_issue(
-                issue.number,
-                GITHUB_REPO_OWNER,
-                GITHUB_REPO_NAME,
-                &author,
-                Some(reason),
-            ) {
-                stats.penalized += 1;
-            }
-        } else if has_duplicate {
-            if storage::record_duplicate_issue(
-                issue.number,
-                GITHUB_REPO_OWNER,
-                GITHUB_REPO_NAME,
-                &author,
-                &hotkey,
-            ) {
-                stats.penalized += 1;
-            }
-        } else if has_valid
-            && storage::record_valid_issue(
-                issue.number,
-                GITHUB_REPO_OWNER,
-                GITHUB_REPO_NAME,
-                &author,
-                &hotkey,
-            )
-        {
+        if has_malicious || has_invalid || has_duplicate {
+            stats.penalized += 1;
+        } else if has_valid {
             stats.awarded += 1;
         }
+
+        records.push(crate::types::IssueRecord {
+            issue_number: issue.number,
+            repo_owner: GITHUB_REPO_OWNER.into(),
+            repo_name: GITHUB_REPO_NAME.into(),
+            author: author.clone(),
+            is_closed,
+            has_valid_label: has_valid && !has_invalid && !has_duplicate && !has_malicious,
+            has_invalid_label: has_invalid && !has_malicious,
+            has_ide_label: false,
+            claimed_by_hotkey: hotkey,
+            recorded_epoch: epoch,
+            has_duplicate_label: has_duplicate && !has_malicious && !has_invalid,
+            has_malicious_label: has_malicious,
+        });
     }
 
-    // Recount all balances from scratch to avoid additive drift on repeated syncs
+    // Only overwrite the blob if we actually fetched something.
+    if !records.is_empty() {
+        storage::store_issue_data(&records);
+    }
+
+    // Recount all balances from scratch
     storage::recount_all_balances();
 
     stats
