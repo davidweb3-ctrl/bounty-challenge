@@ -216,12 +216,11 @@ pub fn background_tick() {
 
     if last == 0 || (now - last) >= GITHUB_FETCH_INTERVAL_MS {
         crate::github_sync::fetch_and_process_issues();
+        storage::store_last_refreshed(now);
     }
 
     storage::recount_all_balances();
     rebuild_leaderboard();
-
-    storage::store_last_refreshed(now);
 }
 
 /// Perform a full sync: rebuild leaderboard and return sync result for consensus
@@ -233,10 +232,10 @@ pub fn perform_sync() -> SyncResult {
 
     if last == 0 || (now - last) >= GITHUB_FETCH_INTERVAL_MS {
         crate::github_sync::fetch_and_process_issues();
+        storage::store_last_refreshed(now);
     }
 
     storage::recount_all_balances();
-    storage::store_last_refreshed(now);
 
     let entries = rebuild_leaderboard();
     let hotkeys = storage::get_registered_hotkeys();
