@@ -79,12 +79,7 @@ fn get_param<'a>(request: &'a WasmRouteRequest, name: &str) -> Option<&'a str> {
 
 pub fn handle_leaderboard(_request: &WasmRouteRequest) -> WasmRouteResponse {
     let entries = scoring::rebuild_leaderboard();
-    let last_refreshed = crate::storage::get_last_refreshed();
-    let response = crate::types::LeaderboardResponse {
-        last_refreshed,
-        entries,
-    };
-    json_response(&response)
+    json_response(&entries)
 }
 
 pub fn handle_stats(_request: &WasmRouteRequest) -> WasmRouteResponse {
