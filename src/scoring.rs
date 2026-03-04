@@ -217,6 +217,9 @@ pub fn background_tick() {
 
     storage::recount_all_balances();
     rebuild_leaderboard();
+
+    let now = platform_challenge_sdk_wasm::host_functions::host_get_timestamp();
+    storage::store_last_refreshed(now);
 }
 
 /// Perform a full sync: rebuild leaderboard and return sync result for consensus

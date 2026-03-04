@@ -719,6 +719,25 @@ pub fn get_validator_count() -> u64 {
         .unwrap_or(0)
 }
 
+pub fn store_last_refreshed(ts: i64) {
+    let _ = host_storage_set(b"last_refreshed", &ts.to_le_bytes());
+}
+
+pub fn get_last_refreshed() -> i64 {
+    host_storage_get(b"last_refreshed")
+        .ok()
+        .and_then(|d| {
+            if d.len() >= 8 {
+                let mut buf = [0u8; 8];
+                buf.copy_from_slice(&d[..8]);
+                Some(i64::from_le_bytes(buf))
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0)
+}
+
 pub fn ensure_hotkey_tracked(hotkey: &str) {
     add_registered_hotkey(hotkey);
 }

@@ -98,6 +98,12 @@ pub struct LeaderboardEntry {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LeaderboardResponse {
+    pub last_refreshed: i64,
+    pub entries: Vec<LeaderboardEntry>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StatsResponse {
     pub total_bounties: u64,
     pub active_miners: u64,
