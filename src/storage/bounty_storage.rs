@@ -50,11 +50,40 @@ pub fn register_user(github_username: &str, hotkey: &str) -> bool {
         }
     }
 
+    write_registration(github_username, &hotkey_ss58)
+}
+
+/// Force-register a user, overwriting any existing mapping.
+/// Used by sudo to reassign github usernames to new hotkeys.
+pub fn force_register_user(github_username: &str, hotkey: &str) -> bool {
+    let hotkey_ss58 = normalize_hotkey_for_storage(hotkey);
+
+    // Clear old github->hotkey mapping if it exists
+    if let Some(old_hotkey) = get_hotkey_by_github(github_username) {
+        if old_hotkey != hotkey_ss58 {
+            // Remove old hotkey's user: entry
+            let old_user_key = make_key(b"user:", &old_hotkey);
+            let _ = host_storage_set(&old_user_key, &[]);
+        }
+    }
+
+    // Clear old hotkey->github mapping if new hotkey was mapped to a different user
+    if let Some(old_github) = get_github_by_hotkey(&hotkey_ss58) {
+        if old_github.to_lowercase() != github_username.to_lowercase() {
+            let old_github_key = make_key(b"github:", &old_github.to_lowercase());
+            let _ = host_storage_set(&old_github_key, &[]);
+        }
+    }
+
+    write_registration(github_username, &hotkey_ss58)
+}
+
+fn write_registration(github_username: &str, hotkey_ss58: &str) -> bool {
     let epoch = host_consensus_get_epoch();
     let current_epoch = if epoch >= 0 { epoch as u64 } else { 0 };
 
     let registration = UserRegistration {
-        hotkey: hotkey_ss58.clone(),
+        hotkey: String::from(hotkey_ss58),
         github_username: String::from(github_username),
         registered_epoch: current_epoch,
     };
@@ -64,7 +93,7 @@ pub fn register_user(github_username: &str, hotkey: &str) -> bool {
         Err(_) => return false,
     };
 
-    let user_key = make_key(b"user:", &hotkey_ss58);
+    let user_key = make_key(b"user:", hotkey_ss58);
     if host_storage_set(&user_key, &data).is_err() {
         return false;
     }

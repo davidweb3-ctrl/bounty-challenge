@@ -177,16 +177,14 @@ pub fn fetch_and_process_issues_with_token(github_token: Option<&str>) -> SyncSt
         last_error: None,
     };
 
-    let _since = build_since_param();
+    let since = build_since_param();
     let mut all_issues: Vec<GitHubIssue> = Vec::new();
+    use core::fmt::Write;
 
+    // Pass 1: fetch by created date (newest first) to get new issues
     let mut page = 1u32;
     loop {
         let mut url = String::from("https://api.github.com/repos/");
-        use core::fmt::Write;
-        // Fetch all issues sorted by creation date (newest first).
-        // We filter by created_at in post-processing. Avoid using &since=
-        // which filters on updated_at and causes accuracy issues.
         let _ = write!(
             url,
             "{}/{}/issues?state=all&sort=created&direction=desc&per_page={}&page={}",
@@ -213,9 +211,6 @@ pub fn fetch_and_process_issues_with_token(github_token: Option<&str>) -> SyncSt
 
         let count = issues.len();
 
-        // Early exit: since results are sorted by created desc, if the
-        // last issue on this page was created before the 24h cutoff we
-        // have all recent issues and can stop paginating.
         let now_ms_check = platform_challenge_sdk_wasm::host_functions::host_get_timestamp();
         let cutoff_check = now_ms_check - (SECONDS_24H * 1000);
         let mut all_old = false;
@@ -237,6 +232,60 @@ pub fn fetch_and_process_issues_with_token(github_token: Option<&str>) -> SyncSt
         page += 1;
         if page > MAX_PAGES {
             break;
+        }
+    }
+
+    // Pass 2: fetch recently updated issues (sorted by updated_at) to
+    // catch label changes on older issues still within the 24h window.
+    // These override pass 1 entries so the freshest label state wins.
+    let mut updated_issues: Vec<GitHubIssue> = Vec::new();
+    let mut updated_page = 1u32;
+    loop {
+        let mut url = String::from("https://api.github.com/repos/");
+        let _ = write!(
+            url,
+            "{}/{}/issues?state=all&sort=updated&direction=desc&per_page={}&page={}&since={}",
+            GITHUB_REPO_OWNER, GITHUB_REPO_NAME, ISSUES_PER_PAGE, updated_page, since
+        );
+
+        let body = match http_get(&url, github_token) {
+            Some(b) => b,
+            None => break,
+        };
+
+        let issues: Vec<GitHubIssue> = match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(_) => break,
+        };
+
+        let count = issues.len();
+        updated_issues.extend(issues);
+
+        if count < ISSUES_PER_PAGE {
+            break;
+        }
+        updated_page += 1;
+        if updated_page > MAX_PAGES {
+            break;
+        }
+    }
+
+    // Merge: pass 2 overrides pass 1 for same issue number (fresher labels)
+    if !updated_issues.is_empty() {
+        let mut updated_map: alloc::collections::BTreeMap<u32, GitHubIssue> =
+            alloc::collections::BTreeMap::new();
+        for issue in updated_issues {
+            updated_map.insert(issue.number, issue);
+        }
+        // Replace pass 1 entries with pass 2 where available
+        for existing in &mut all_issues {
+            if let Some(updated) = updated_map.remove(&existing.number) {
+                *existing = updated;
+            }
+        }
+        // Add any remaining pass 2 issues not in pass 1
+        for (_, issue) in updated_map {
+            all_issues.push(issue);
         }
     }
 

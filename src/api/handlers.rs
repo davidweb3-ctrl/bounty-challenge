@@ -626,7 +626,7 @@ pub fn handle_sudo_register_user(request: &WasmRouteRequest) -> WasmRouteRespons
         return json_error(400, "bad_request", "hotkey and github_username required");
     }
 
-    if storage::register_user(&req.github_username, &req.hotkey) {
+    if storage::force_register_user(&req.github_username, &req.hotkey) {
         storage::ensure_hotkey_tracked(&req.hotkey);
         scoring::rebuild_leaderboard();
         json_response(&serde_json::json!({
